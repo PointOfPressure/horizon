@@ -1098,6 +1098,15 @@ impl ShrinkGate {
         left == COMPACT_BUDGET && self.0.is_none_or(|at| now >= at)
     }
 }
+/// Process-wide functions a client mod runs at the start of every [`Renderer::render`] (after the lost-device check,
+/// before anything of the frame is drawn or uploaded), in the order installed: to prepare its own passes, such as a
+/// sky, against this frame.
+static BEFORE_RENDER: [std::sync::OnceLock<fn(&mut Renderer, &Frame<'_>)>; 4] =
+    [const { std::sync::OnceLock::new() }; 4];
+/// Installs one of [`BEFORE_RENDER`] for the rest of the process; false when all are taken.
+pub fn before_render(prepare: fn(&mut Renderer, &Frame<'_>)) -> bool {
+    BEFORE_RENDER.iter().any(|slot| slot.set(prepare).is_ok())
+}
 pub struct Frame<'a> {
     pub camera: DVec3,
     pub yaw: f32,
@@ -7031,6 +7040,9 @@ impl Renderer {
         // owner instead of submitting atlas patches to the invalid device.
         if self.device_lost() {
             return Err("the graphics device was lost".into());
+        }
+        for prepare in BEFORE_RENDER.iter().map_while(|slot| slot.get()) {
+            prepare(self, frame);
         }
         if let Some(request) = self.capture.take() {
             let result = self.write_capture(&request, frame);
