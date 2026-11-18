@@ -98,6 +98,15 @@ impl SpriteAnimation {
     }
 }
 
+/// A client mod's rewrite of a sprite's RGBA frames as the atlas takes them, by sprite name (`minecraft:block/water_still`):
+/// true when it changed them, which makes the sprite translucent. Read on every layout of the atlas, so a change
+/// shows after the next resource reload.
+static SPRITE_FILTER: std::sync::OnceLock<fn(&str, &mut [Vec<u8>]) -> bool> = std::sync::OnceLock::new();
+/// Installs the sprite filter for the rest of the process; false when one is already set.
+pub fn filter_sprites(filter: fn(&str, &mut [Vec<u8>]) -> bool) -> bool {
+    SPRITE_FILTER.set(filter).is_ok()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct StillKey {
     frame: u64,
@@ -731,14 +740,17 @@ impl Sprites {
     fn register(&mut self, name: &str, decoded: crate::sprite_cache::Decoded) -> Result<u32> {
         let crate::sprite_cache::Decoded {
             side,
-            frames,
+            mut frames,
             animation: animation_text,
             strategy,
             alpha_cutoff_bias,
-            has_transparent,
-            opaque,
-            translucent,
+            mut has_transparent,
+            mut opaque,
+            mut translucent,
         } = decoded;
+        if SPRITE_FILTER.get().is_some_and(|filter| filter(name, &mut frames)) {
+            (has_transparent, opaque, translucent) = (true, false, true);
+        }
         let animation = animation_text
             .as_deref()
             .map(AnimationMetadata::from_json)
